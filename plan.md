@@ -1,4 +1,4 @@
-# Slack 환율 알림 기능 구현 계획
+# AWS EC2 배포 계획
 
 작성일: 2026-03-16
 
@@ -6,168 +6,116 @@
 
 ## 요구사항
 
-### 알림 1: 금일 최저값 하락 알림
-- 현재 환율이 **금일 변동 최저값** 이하로 떨어지면 Slack으로 알림 전송
-- 알림 메시지에 **환율 저장 API URL** 포함
-- 중복 방지
-
-### 알림 2: 저장 환율 대비 상승 알림
-- API로 특정 시점의 환율을 저장
-- 이후 현재 환율이 **저장된 환율 + 2원 이상** 오르면 Slack 알림 전송
-- 중복 방지
-
-### API
-- `GET /save` — 호출 시점의 현재 환율을 메모리에 저장, 이후 +2원 상승 감시 시작
-- `GET /clear` — 저장된 환율 삭제, 상승 알림 비활성화 (금일 최저값 알림만 동작)
+- exchange-crawler를 EC2에서 24시간 실행
+- Playwright (headless Chromium) 구동 가능한 환경
+- API 서버 (포트 3000) 외부 접근 가능
+- 프로세스 자동 재시작 (크래시 대응)
 
 ---
 
-## 현재 코드 상태
+## 인스턴스 사양
 
-`fetchRate()`가 반환하는 값:
-- `rate` — 현재 환율
-- `raw` — 원본 텍스트
-- `dailyMid` — 금일 변동 중간값 `(low + high) / 2`
-
-`DAILY_RANGE_SELECTOR`에서 `low`, `high`를 이미 파싱하고 있지만 `dailyMid`로만 반환 중.
-→ `low` (금일 최저값)를 별도로 반환하도록 수정 필요.
-
----
-
-## 구현 계획
-
-### ✅ Step 1: fetchRate() 반환값에 dailyLow 추가
-
-수정 파일: `src/crawler.js`
-
-```javascript
-// 현재: return { rate, raw, dailyMid };
-// 변경: return { rate, raw, dailyLow, dailyHigh, dailyMid };
-```
-
-### ✅ Step 2: Slack 알림 모듈 생성
-
-새 파일: `src/notifier.js`
-
-- Slack Incoming Webhook URL 사용
-- 환경변수 `SLACK_WEBHOOK_URL`에서 URL 읽기
-- `node:https` 내장 모듈로 POST 요청 (외부 의존성 없음)
-
-```javascript
-export async function sendSlackAlert({ text })
-```
-
-### ✅ Step 3: HTTP API 서버 생성
-
-새 파일: `src/server.js`
-
-- `node:http` 내장 모듈 사용 (외부 의존성 없음)
-- 환경변수 `PORT` (기본값: 3000)
-- 공유 상태 객체 `state`를 외부에서 주입받음
-
-| 엔드포인트 | 동작 |
+| 항목 | 권장 |
 |---|---|
-| `GET /save` | `state.savedRate = state.currentRate`, 저장된 환율 응답 |
-| `GET /clear` | `state.savedRate = null`, 삭제 확인 응답 |
+| AMI | Amazon Linux 2023 또는 Ubuntu 24.04 |
+| 인스턴스 타입 | t3.small (2 vCPU, 2GB RAM) — Chromium 최소 사양 |
+| 스토리지 | 20GB gp3 — Chromium + 의존성 용량 |
+| 보안 그룹 | SSH(22), API(3000) 인바운드 허용 |
 
-```javascript
-export function startServer(state)
-```
-
-### ✅ Step 4: scheduler.js에 알림 로직 추가
-
-수정 파일: `src/scheduler.js`
-
-tick() 내부에서 fetchRate 성공 후 두 가지 알림 조건 검사:
-
-```
-// 알림 1: 금일 최저값 하락
-if (dailyLow != null && rate <= dailyLow && !lowAlerted) {
-  sendSlackAlert — 현재 환율, 금일 최저값, /save API URL 포함
-  lowAlerted = true
-}
-if (rate > dailyLow) → lowAlerted = false (리셋)
-
-// 알림 2: 저장 환율 대비 +2원 상승
-if (state.savedRate != null && rate >= state.savedRate + 2 && !riseAlerted) {
-  sendSlackAlert — 현재 환율, 저장 환율, 차이
-  riseAlerted = true
-}
-if (state.savedRate == null || rate < state.savedRate + 2) → riseAlerted = false (리셋)
-```
-
-`state` 객체: scheduler, server 간 공유
-
-```javascript
-// state 구조
-{
-  currentRate: null,   // 매 tick마다 갱신
-  savedRate: null,     // /save 호출 시 설정, /clear 호출 시 null
-}
-```
-
-### ✅ Step 5: index.js에서 서버 시작
-
-수정 파일: `src/index.js`
-
-- `state` 객체 생성
-- `startServer(state)` 호출
-- `startScheduler(ref, state)` 로 state 전달
-
-### ✅ Step 6: 환경변수 설정
-
-- `.env.example` 파일 생성
-- `.gitignore`에 `.env` 추가
-- Webhook URL 미설정 시 알림 비활성화 (크롤링은 정상 동작)
-
-```
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/XXX/YYY/ZZZ
-PORT=3000
-```
+> t3.micro (1GB RAM)는 Chromium이 OOM 발생 가능. t3.small 이상 권장.
 
 ---
 
-## 알림 메시지 포맷
+## 배포 단계
 
-### 알림 1: 금일 최저값 하락
+### Step 1: EC2 인스턴스 생성
 
+- AWS 콘솔 또는 CLI로 인스턴스 생성
+- 키 페어 생성/선택
+- 보안 그룹: TCP 22 (SSH), TCP 3000 (API) 인바운드 허용
+
+### Step 2: 서버 환경 설정
+
+SSH 접속 후:
+
+```bash
+# Node.js 설치
+curl -fsSL https://fnm.vercel.app/install | bash
+source ~/.bashrc
+fnm install 22
+fnm use 22
+
+# Playwright 시스템 의존성 설치
+sudo npx playwright install-deps chromium
 ```
-📉 USD/KRW 금일 최저값 도달
-현재: 1,485.50
-금일 최저: 1,485.67
-시각: 14:32:01
 
-이 환율을 저장하려면: http://<host>:3000/save
+### Step 3: 프로젝트 배포
+
+```bash
+# 방법 1: git clone (저장소가 있는 경우)
+git clone <repo-url> ~/exchange
+cd ~/exchange
+npm install
+npx playwright install chromium
+
+# 방법 2: scp로 직접 전송
+# (로컬에서) scp -i key.pem -r ./exchange ec2-user@<ip>:~/exchange
 ```
 
-### 알림 2: 저장 환율 대비 상승
+### Step 4: 환경변수 설정
 
+```bash
+cd ~/exchange
+cp .env.example .env
+vi .env
+# SLACK_WEBHOOK_URL=https://hooks.slack.com/services/실제/웹훅/URL
+# PORT=3000
 ```
-📈 USD/KRW 저장 환율 대비 +2원 이상 상승
-현재: 1,487.80
-저장 환율: 1,485.50 (차이: +2.30)
-시각: 14:45:11
+
+### Step 5: PM2로 프로세스 관리
+
+```bash
+npm install -g pm2
+
+# 실행
+pm2 start src/index.js --name exchange --node-args="--env-file=.env"
+
+# 자동 재시작 설정 (서버 리부트 시)
+pm2 startup
+pm2 save
+
+# 로그 확인
+pm2 logs exchange
 ```
+
+### Step 6: 동작 확인
+
+```bash
+# 로그 확인
+pm2 logs exchange --lines 20
+
+# API 테스트
+curl http://localhost:3000/test
+curl http://localhost:3000/save
+curl http://localhost:3000/clear
+```
+
+외부에서: `http://<EC2-퍼블릭-IP>:3000/test`
 
 ---
 
-## 파일 변경 요약
+## 파일 변경 없음
 
-| 파일 | 변경 |
+현재 코드 그대로 EC2에서 실행 가능. WSL2 전용 `LD_LIBRARY_PATH` 설정은 해당 경로가 없으면 무시되므로 영향 없음.
+
+---
+
+## 운영 참고
+
+| 항목 | 명령어 |
 |---|---|
-| `src/crawler.js` | fetchRate 반환값에 `dailyLow`, `dailyHigh` 추가 |
-| `src/notifier.js` | 신규 — Slack webhook POST |
-| `src/server.js` | 신규 — HTTP 서버 (`/save`, `/clear`) |
-| `src/scheduler.js` | 알림 조건 2개 + 중복 방지 + state 연동 |
-| `src/index.js` | state 객체 생성, 서버 시작, scheduler에 state 전달 |
-| `.env.example` | 신규 — `SLACK_WEBHOOK_URL`, `PORT` |
-| `.gitignore` | `.env` 추가 |
-
----
-
-## Slack Webhook 설정 방법 (참고)
-
-1. https://api.slack.com/apps → Create New App → From scratch
-2. Incoming Webhooks → Activate
-3. Add New Webhook to Workspace → 채널 선택
-4. 생성된 URL을 `.env`의 `SLACK_WEBHOOK_URL`에 설정
+| 로그 확인 | `pm2 logs exchange` |
+| 재시작 | `pm2 restart exchange` |
+| 중지 | `pm2 stop exchange` |
+| 상태 확인 | `pm2 status` |
+| 코드 업데이트 후 | `git pull && pm2 restart exchange` |

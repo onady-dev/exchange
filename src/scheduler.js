@@ -1,10 +1,11 @@
-import { fetchRate, isSessionError, BlockedError, createCrawler } from './crawler.js';
+import { fetchRate, isSessionError, BlockedError, createCrawler, reloadPage } from './crawler.js';
 import { sendSlackAlert } from './notifier.js';
 
 const INTERVAL_MS = 10_000;    // 10초
 const MAX_RECONNECT = 3;        // 최대 재연결 횟수
 const RECONNECT_DELAY_MS = 15_000; // 재연결 전 대기 시간
 const RISE_THRESHOLD = 2;       // 저장 환율 대비 상승 알림 기준 (원)
+const STALE_COUNT = 6;          // 같은 값 연속 횟수 (6회 = 1분) → 새로고침
 
 const PORT = process.env.PORT || 3000;
 
@@ -13,6 +14,9 @@ export function startScheduler(ref, state) {
   let reconnecting = false;
   let lowAlerted = false;
   let riseAlerted = false;
+  let midDropAlerted = false;
+  let lastRate = null;
+  let sameCount = 0;
 
   const reconnect = async () => {
     if (reconnecting) return;
@@ -32,7 +36,7 @@ export function startScheduler(ref, state) {
     }
   };
 
-  const checkAlerts = async (rate, dailyLow, ts) => {
+  const checkAlerts = async (rate, dailyLow, dailyMid, ts) => {
     // 알림 1: 금일 최저값 하락
     if (dailyLow != null && rate <= dailyLow && !lowAlerted) {
       lowAlerted = true;
@@ -49,6 +53,15 @@ export function startScheduler(ref, state) {
       await sendSlackAlert(text).catch(e => console.error(`[알림 실패] ${e.message}`));
     }
     if (state.savedRate == null || rate < state.savedRate + RISE_THRESHOLD) riseAlerted = false;
+
+    // 알림 3: 금일 변동 평균값 대비 2원 하락
+    if (dailyMid != null && rate <= dailyMid - RISE_THRESHOLD && !midDropAlerted) {
+      midDropAlerted = true;
+      const diff = Math.round((dailyMid - rate) * 100) / 100;
+      const text = `📉 USD/KRW 금일 평균 대비 -${RISE_THRESHOLD}원 이상 하락\n현재: ${rate}\n금일 평균: ${dailyMid} (차이: -${diff})\n시각: ${ts}\n\n이 환율을 저장하려면: http://localhost:${PORT}/save`;
+      await sendSlackAlert(text).catch(e => console.error(`[알림 실패] ${e.message}`));
+    }
+    if (dailyMid != null && rate > dailyMid - RISE_THRESHOLD) midDropAlerted = false;
   };
 
   const tick = async () => {
@@ -59,11 +72,24 @@ export function startScheduler(ref, state) {
       reconnectCount = 0;
       state.currentRate = rate;
 
+      // WebSocket 끊김 감지: 같은 값이 STALE_COUNT회 연속이면 새로고침
+      if (rate === lastRate) {
+        sameCount++;
+        if (sameCount >= STALE_COUNT) {
+          console.warn(`[경고] 환율 ${sameCount}회 연속 동일 (${rate}) — 페이지 새로고침`);
+          await reloadPage(ref.page);
+          sameCount = 0;
+        }
+      } else {
+        sameCount = 0;
+        lastRate = rate;
+      }
+
       const ts = new Date().toLocaleTimeString('ko-KR', { hour12: false });
       const midStr = dailyMid != null ? ` | 금일 최저값: ${dailyLow} |금일 변동 중간값: ${dailyMid}` : '';
       console.log(`[${ts}] USD/KRW: ${raw}${midStr}`);
 
-      await checkAlerts(rate, dailyLow, ts);
+      await checkAlerts(rate, dailyLow, dailyMid, ts);
     } catch (err) {
       const needsReconnect = isSessionError(err) || err instanceof BlockedError;
 

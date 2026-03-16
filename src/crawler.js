@@ -93,6 +93,21 @@ export async function isBlocked(page) {
   }
 }
 
+export async function reloadPage(page) {
+  await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.waitForFunction(
+    (selector) => {
+      const el = document.querySelector(selector);
+      if (!el) return false;
+      const val = parseFloat(el.textContent.replace(/,/g, ''));
+      return !isNaN(val) && val > 0;
+    },
+    PRICE_SELECTOR,
+    { timeout: 15000 },
+  );
+  console.log('[페이지 새로고침 완료]');
+}
+
 export async function fetchRate(page) {
   if (await isBlocked(page)) {
     throw new BlockedError('Cloudflare 챌린지 페이지 감지');
