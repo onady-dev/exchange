@@ -105,8 +105,8 @@ export async function fetchRate(page) {
   const rate = parseFloat(raw.replace(/,/g, ''));
   if (isNaN(rate)) throw new Error(`파싱 실패: "${raw}"`);
 
-  // 금일 변동 범위 중간값: "1,485.67-1,501.26" → (저가 + 고가) / 2
-  let dailyMid = null;
+  // 금일 변동 범위: "1,485.67-1,501.26" → low, high, mid
+  let dailyLow = null, dailyHigh = null, dailyMid = null;
   const rangeEl = await page.$(DAILY_RANGE_SELECTOR);
   if (rangeEl) {
     const rangeText = await rangeEl.textContent();
@@ -114,9 +114,11 @@ export async function fetchRate(page) {
     const low = parseFloat(lowStr.replace(/,/g, ''));
     const high = parseFloat(highStr.replace(/,/g, ''));
     if (!isNaN(low) && !isNaN(high)) {
+      dailyLow = low;
+      dailyHigh = high;
       dailyMid = Math.round(((low + high) / 2) * 100) / 100;
     }
   }
 
-  return { rate, raw, dailyMid };
+  return { rate, raw, dailyLow, dailyHigh, dailyMid };
 }

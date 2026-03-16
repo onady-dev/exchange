@@ -1,517 +1,256 @@
-# 실시간 환율 크롤링 프로젝트 연구 보고서
+# exchange-crawler 프로젝트 리서치
 
-작성일: 2026-03-13
-
----
-
-## 목차
-
-1. [프로젝트 개요](#1-프로젝트-개요)
-2. [환율 데이터 소스 분석](#2-환율-데이터-소스-분석)
-3. [크롤링 기술 스택 분석](#3-크롤링-기술-스택-분석)
-4. [아키텍처 설계](#4-아키텍처-설계)
-5. [스케줄링 전략](#5-스케줄링-전략)
-6. [데이터 저장 전략](#6-데이터-저장-전략)
-7. [봇 탐지 우회 기법](#7-봇-탐지-우회-기법)
-8. [법적·윤리적 고려사항](#8-법적윤리적-고려사항)
-9. [권장 기술 스택 요약](#9-권장-기술-스택-요약)
-10. [구현 로드맵](#10-구현-로드맵)
+작성일: 2026-03-16
 
 ---
 
 ## 1. 프로젝트 개요
 
-실시간 환율 정보를 다양한 소스(공식 API, 은행 사이트, 포털)에서 수집하고, 이를 주기적으로 갱신·저장·제공하는 시스템을 구축하는 프로젝트다.
-
-### 핵심 요구사항
-
-- 다수의 환율 소스에서 데이터 수집
-- 주기적 자동 갱신 (실시간 또는 주기적)
-- 수집 데이터의 영구 저장 및 이력 관리
-- 외부 서비스에 데이터 제공 (API 서버)
-- 안정적 운영 (장애 복구, 재시도 로직)
+USD/KRW 실시간 환율을 10초 간격으로 크롤링하여 콘솔에 출력하는 Node.js 애플리케이션.
+대상 사이트: `https://kr.investing.com/currencies/usd-krw`
 
 ---
 
-## 2. 환율 데이터 소스 분석
+## 2. 기술 스택
 
-### 2.1 국내 공식 API (추천)
-
-#### 한국수출입은행 환율 Open API
-- **출처**: 공공데이터포털 (data.go.kr)
-- **특징**:
-  - 무료, 인증키 발급 필요 (간단한 본인인증)
-  - JSON 형식 응답
-  - 약 35개 주요 통화 지원
-  - 매 영업일 기준 환율 제공 (실시간 X, 고시환율)
-- **도메인 변경 사항** (2025년 6월 25일부터):
-  - 구: `www.koreaexim.go.kr`
-  - 신: `oapi.koreaexim.go.kr`
-- **API URL 예시**:
-  ```
-  https://oapi.koreaexim.go.kr/site/program/financial/exchangeJSON
-    ?authkey={인증키}
-    &data=AP01
-  ```
-- **인증키 발급**: 한국수출입은행 Open API 페이지 또는 공공데이터포털
-
-#### 한국은행 ECOS Open API
-- **출처**: https://ecos.bok.or.kr/api/
-- **특징**:
-  - 한국은행 공식 경제통계 데이터
-  - 환율, 금리, 물가 등 다양한 금융 데이터 제공
-  - 인증키 발급 필요
-
-### 2.2 글로벌 환율 API
-
-| 서비스 | 무료 플랜 | 갱신 주기 | API Key 필요 | 특이사항 |
-|---|---|---|---|---|
-| **Frankfurter** | 완전 무료 | ECB 기준 (영업일) | 불필요 | 오픈소스, 사용량 제한 없음 |
-| **ExchangeRate-API** | 월 1,500건 | 24시간 | 필요 | JSON 응답, 170+ 통화 |
-| **Open Exchange Rates** | 월 1,000건 | 1시간 | 필요 | 신뢰성 높음 |
-| **Fixer.io** | 월 100건 | 60초 | 필요 | 실시간에 가장 근접 |
-| **Currencylayer** | 월 100건 | 실시간 | 필요 | 168개 통화 |
-| **ExchangeRate.host** | 무료 | 실시간 | 불필요 | 안정성 주의 |
-
-**가장 추천**: Frankfurter (무료, API Key 불필요, ECB 공식 데이터)
-```
-https://api.frankfurter.dev/v1/latest?base=USD&symbols=KRW,EUR,JPY
-```
-
-### 2.3 국내 포털/은행 사이트 크롤링
-
-#### 네이버 환율
-- **URL**: https://finance.naver.com/marketindex/
-- **특징**: iframe으로 환율 정보 감쌈 → iframe 전환 필요
-- **크롤링 방식**: Selenium 또는 Playwright (JavaScript 렌더링 필요)
-- **장점**: 국내에서 가장 접근하기 쉬운 데이터
-- **주의**: 비공식 크롤링, ToS 확인 필요
-
-#### 하나은행 (KEB하나은행)
-- **URL**: https://www.kebhana.com/cont/mall/mall15/mall1501/index.jsp
-- **크롤링 방식**: Selenium + iframe 전환, 또는 Java Jsoup
-- **특징**: 실시간 매매 환율 제공
-
-#### 한국무역협회 (KITA)
-- **URL**: https://www.kita.net/cmmrcInfo/ehgtGnrlzInfo/rltmEhgt.do
-- **특징**: 실시간 환율 종합 정보 제공
+| 항목 | 선택 | 버전 | 역할 |
+|---|---|---|---|
+| 런타임 | Node.js | ESM (`"type": "module"`) | 진입점, 비동기 처리 |
+| 브라우저 자동화 | Playwright | ^1.58.2 | headless Chromium 제어 |
+| 스텔스 | playwright-extra + puppeteer-extra-plugin-stealth | ^4.3.6 / ^2.11.2 | 봇 탐지 우회 |
+| 스케줄링 | setInterval (내장) | — | 10초 주기 반복 |
 
 ---
 
-## 3. 크롤링 기술 스택 분석
-
-### 3.1 정적 사이트 크롤링 (HTML 파싱)
+## 3. 프로젝트 구조
 
 ```
-requests + BeautifulSoup
+exchange/
+├── package.json           # 프로젝트 메타 + 의존성
+├── package-lock.json
+├── .gitignore             # node_modules/ 제외
+├── plan.md                # 초기 구현 계획서
+├── block-fix-plan.md      # 차단 문제 분석 및 해결 계획
+├── research.md            # 본 문서
+└── src/
+    ├── index.js           # 진입점 — 크롤러 생성, 스케줄러 시작, 시그널 처리
+    ├── crawler.js         # Playwright 크롤링 로직 — 브라우저 생성, 가격 추출, 차단 감지
+    └── scheduler.js       # 10초 인터벌 관리 — 에러 분류, 자동 재연결
 ```
-
-- **장점**: 빠름, 가볍고 간단, 오버헤드 없음
-- **단점**: JavaScript 렌더링 불가, 봇 탐지에 취약
-- **적합한 소스**: HTML 응답이 완전한 사이트, REST API 직접 호출
-- **설치**:
-  ```bash
-  pip install requests beautifulsoup4 lxml
-  ```
-
-### 3.2 동적 사이트 크롤링 (JavaScript 렌더링)
-
-#### Selenium
-```python
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-```
-- **장점**: 오랜 생태계, 다양한 레퍼런스
-- **단점**: 무거움, 봇 탐지 취약
-- **봇 우회**: `selenium-stealth`, `undetected-chromedriver` 활용
-
-#### Playwright (2026년 기준 추천)
-```python
-from playwright.async_api import async_playwright
-```
-- **장점**: Selenium보다 빠름, 안정적, async 지원, 봇 탐지 우회 용이
-- **단점**: 상대적으로 새로운 도구 (레퍼런스 적음)
-- **설치**:
-  ```bash
-  pip install playwright
-  playwright install chromium
-  ```
-
-#### Scrapy + Playwright (대규모 크롤링)
-- **장점**: 분산 크롤링, 파이프라인 구조화, 속도
-- **단점**: 학습 곡선 높음, 소규모 프로젝트에는 과함
-- **설치**:
-  ```bash
-  pip install scrapy scrapy-playwright
-  ```
-
-### 3.3 기술 스택 선택 기준
-
-| 케이스 | 추천 스택 |
-|---|---|
-| REST API 호출 (공식 API) | `requests` |
-| 정적 HTML 파싱 | `requests + BeautifulSoup` |
-| JavaScript SPA 사이트 | `Playwright` |
-| 대규모 다중 사이트 | `Scrapy + Playwright` |
-| 봇 탐지가 강한 사이트 | `Playwright + stealth` |
 
 ---
 
-## 4. 아키텍처 설계
+## 4. 아키텍처 및 데이터 흐름
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   Scheduler (Celery Beat)            │
-│              (매 N분마다 크롤링 작업 트리거)              │
-└──────────────────────────┬──────────────────────────┘
-                           │
-              ┌────────────▼────────────┐
-              │   Task Queue (Redis)    │
-              └────────────┬────────────┘
-                           │
-         ┌─────────────────▼──────────────────────┐
-         │           Celery Workers                │
-         │  ┌──────────┐  ┌──────────┐  ┌──────┐  │
-         │  │ 수출입은행 │  │Frankfurter│  │네이버│  │
-         │  │  API     │  │   API    │  │크롤링│  │
-         │  └────┬─────┘  └────┬─────┘  └──┬───┘  │
-         └───────┼─────────────┼────────────┼──────┘
-                 │             │            │
-         ┌───────▼─────────────▼────────────▼──────┐
-         │         Data Processing Layer            │
-         │    (정규화, 유효성 검사, 중복 제거)           │
-         └───────────────────┬──────────────────────┘
-                             │
-              ┌──────────────▼──────────────┐
-              │      Storage Layer          │
-              │  PostgreSQL (이력 저장)       │
-              │  Redis Cache (최신 환율 캐시) │
-              └──────────────┬──────────────┘
-                             │
-              ┌──────────────▼──────────────┐
-              │      FastAPI Server         │
-              │  (환율 조회 REST API 제공)    │
-              └─────────────────────────────┘
+index.js
+  ├─ createCrawler() → { browser, page } (ref 객체)
+  ├─ startScheduler(ref) → setInterval 반환
+  │     └─ 매 10초마다 tick()
+  │           ├─ fetchRate(page) → { rate, raw, dailyMid }
+  │           ├─ 성공 → console.log 출력
+  │           └─ 실패 → 에러 분류 후 재연결 or 스킵
+  └─ SIGINT/SIGTERM → shutdown (clearInterval + browser.close)
 ```
 
-### 주요 컴포넌트
+핵심 설계: investing.com은 WebSocket으로 가격을 실시간 push하므로, 페이지를 1회 로딩한 뒤 DOM만 반복 읽기하여 서버 부하를 최소화한다.
 
-| 컴포넌트 | 역할 | 기술 |
+---
+
+## 5. 모듈별 상세 분석
+
+### 5.1 index.js (37줄)
+
+- `createCrawler()`로 브라우저/페이지 생성 → `ref` 객체로 관리
+- `ref` 패턴 이유: scheduler가 재연결 시 browser/page를 교체할 수 있도록 참조 객체 사용
+- `startScheduler(ref)` → interval ID 반환
+- `shutdown()` 함수: SIGINT, SIGTERM 모두 처리 (clearInterval → browser.close → exit)
+- `browser.on('disconnected')`: 외부 원인으로 브라우저 끊김 시 로그 (재연결은 scheduler 담당)
+- WSL2 환경 대응: `LD_LIBRARY_PATH`에 `~/local-libs` 경로 추가 (누락된 시스템 라이브러리 보완)
+
+### 5.2 crawler.js (122줄)
+
+#### 상수
+
+| 상수 | 값 | 용도 |
 |---|---|---|
-| Scheduler | 주기적 크롤링 트리거 | Celery Beat |
-| Task Queue | 비동기 작업 관리 | Redis |
-| Workers | 실제 크롤링 수행 | Celery + Playwright/requests |
-| Storage | 데이터 영구 저장 | PostgreSQL |
-| Cache | 최신 환율 빠른 조회 | Redis |
-| API Server | 외부 데이터 제공 | FastAPI |
+| `TARGET_URL` | `https://kr.investing.com/currencies/usd-krw` | 크롤링 대상 |
+| `PRICE_SELECTOR` | `[data-test="instrument-price-last"]` | 현재 환율 DOM 셀렉터 |
+| `DAILY_RANGE_SELECTOR` | `[data-test="dailyRange"]` | 금일 변동 범위 셀렉터 |
 
----
+#### 클래스/함수
 
-## 5. 스케줄링 전략
-
-### 5.1 APScheduler (경량, 단순 프로젝트)
-
-```python
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-scheduler = AsyncIOScheduler()
-scheduler.add_job(fetch_exchange_rates, 'interval', minutes=5)
-scheduler.start()
-```
-
-- **장점**: 별도 브로커 불필요, 간단한 설정
-- **단점**: 단일 프로세스, 분산 처리 불가, 재시작 시 작업 손실
-- **적합 케이스**: 단일 서버, 간단한 주기적 크롤링
-
-### 5.2 Celery + Celery Beat (권장, 프로덕션)
-
-```python
-# celery_config.py
-from celery.schedules import crontab
-
-CELERYBEAT_SCHEDULE = {
-    'fetch-exchange-rates-every-5min': {
-        'task': 'tasks.fetch_exchange_rates',
-        'schedule': 300.0,  # 5분마다
-    },
-    'fetch-exchange-rates-market-open': {
-        'task': 'tasks.fetch_all_sources',
-        'schedule': crontab(hour='9-16', minute='*/10'),  # 장중 10분마다
-    },
-}
-```
-
-- **장점**: 분산 처리, 재시도 로직, 모니터링(Flower), 확장성
-- **단점**: Redis/RabbitMQ 브로커 필요, 설정 복잡
-- **적합 케이스**: 프로덕션 환경, 다수 소스 크롤링
-
-### 5.3 갱신 주기 권장안
-
-| 소스 유형 | 권장 주기 | 이유 |
+| 이름 | 타입 | 설명 |
 |---|---|---|
-| 공식 API (수출입은행) | 1회/일 (영업일) | 고시환율, 하루 1회 업데이트 |
-| Frankfurter | 1회/일 | ECB 기준, 영업일 1회 |
-| 네이버/은행 크롤링 | 5~10분 | 실시간 매매율 반영 |
-| 글로벌 API (Fixer 등) | 1분~1시간 | 플랜에 따라 상이 |
+| `BlockedError` | class (extends Error) | Cloudflare 차단 전용 에러 |
+| `isSessionError(err)` | function | 세션 종료 에러 판별 (5개 패턴 매칭) |
+| `createCrawler()` | async function | 브라우저 생성 + 페이지 로딩 + 가격 데이터 대기 |
+| `isBlocked(page)` | async function | Cloudflare 챌린지 페이지 감지 (URL/title 기반) |
+| `fetchRate(page)` | async function | DOM에서 현재 환율 + 금일 변동 중간값 추출 |
+
+#### createCrawler() 상세
+
+1. `chromium.launch({ headless: true, args: ['--no-sandbox'] })`
+2. `browser.newContext()` — viewport 1280×720, locale ko-KR, timezone Asia/Seoul
+   - userAgent 미설정 (실제 Chromium 버전 자동 사용 → UA 불일치 방지)
+3. `page.addInitScript()` — 수동 스텔스 패치:
+   - `navigator.webdriver` → undefined
+   - `navigator.languages` → ['ko-KR', 'ko', 'en-US', 'en']
+   - `navigator.plugins` → 가짜 5개 (headless는 0개라 탐지됨)
+4. `page.goto()` → domcontentloaded 대기
+5. `page.waitForFunction()` — 셀렉터 존재 + 실제 숫자값 채워질 때까지 대기 (WebSocket 데이터 반영 대기)
+
+#### fetchRate() 상세
+
+1. `isBlocked()` 검사 → 차단 시 `BlockedError` throw
+2. `PRICE_SELECTOR`에서 텍스트 추출 → 쉼표 제거 → parseFloat
+3. `DAILY_RANGE_SELECTOR`에서 "저가-고가" 텍스트 파싱 → 중간값 계산: `(low + high) / 2`
+4. 반환: `{ rate, raw, dailyMid }`
+
+### 5.3 scheduler.js (61줄)
+
+#### 상수
+
+| 상수 | 값 | 용도 |
+|---|---|---|
+| `INTERVAL_MS` | 10,000 (10초) | 크롤링 주기 |
+| `MAX_RECONNECT` | 3 | 최대 재연결 횟수 (초과 시 process.exit(1)) |
+| `RECONNECT_DELAY_MS` | 15,000 (15초) | 재연결 전 대기 시간 |
+
+#### startScheduler(ref) 동작
+
+- `reconnectCount`: 연속 재연결 횟수 (성공 시 0으로 리셋)
+- `reconnecting`: 재연결 진행 중 플래그 (중복 재연결 방지)
+
+##### tick() 로직
+
+```
+fetchRate 성공 → reconnectCount 리셋, 콘솔 출력
+fetchRate 실패 →
+  ├─ isSessionError 또는 BlockedError → 재연결 필요
+  │     ├─ reconnectCount >= MAX_RECONNECT → 프로세스 종료
+  │     └─ 15초 대기 → reconnect()
+  └─ 기타 에러 (파싱 실패 등) → 로그만 출력, 다음 틱에 자연 재시도
+```
+
+##### reconnect() 로직
+
+1. 기존 browser.close() (이미 닫혔을 수 있으므로 catch 무시)
+2. createCrawler() 호출 → 새 browser/page 생성
+3. ref.browser, ref.page 교체
+4. reconnectCount 리셋
 
 ---
 
-## 6. 데이터 저장 전략
+## 6. 봇 탐지 우회 전략
 
-### 6.1 데이터베이스 스키마 (PostgreSQL)
+| 계층 | 전략 | 구현 위치 |
+|---|---|---|
+| 플러그인 | playwright-extra + stealth plugin | crawler.js 상단 |
+| UA | 명시 설정 안 함 (실제 Chromium 버전 자동 사용) | createCrawler() |
+| 브라우저 속성 | webdriver 제거, languages/plugins 패치 | addInitScript() |
+| 컨텍스트 | 한국 locale/timezone, 일반적 viewport | newContext() |
+| 요청 패턴 | 페이지 1회 로딩 + DOM 읽기 반복 (새로고침 없음) | 아키텍처 설계 |
+| 차단 감지 | URL/title 기반 Cloudflare 챌린지 탐지 | isBlocked() |
 
-```sql
--- 통화 마스터
-CREATE TABLE currencies (
-    code        CHAR(3) PRIMARY KEY,     -- KRW, USD, EUR, JPY
-    name_ko     VARCHAR(50),
-    name_en     VARCHAR(50),
-    symbol      VARCHAR(5)
-);
+### 알려진 한계
 
--- 환율 이력
-CREATE TABLE exchange_rates (
-    id          BIGSERIAL PRIMARY KEY,
-    base_code   CHAR(3) NOT NULL,        -- 기준 통화 (보통 KRW 또는 USD)
-    target_code CHAR(3) NOT NULL,
-    rate        NUMERIC(18, 6) NOT NULL,
-    source      VARCHAR(50) NOT NULL,    -- 'koreaexim', 'frankfurter', 'naver'
-    fetched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    FOREIGN KEY (base_code) REFERENCES currencies(code),
-    FOREIGN KEY (target_code) REFERENCES currencies(code)
-);
-
--- 조회 성능을 위한 인덱스
-CREATE INDEX idx_exchange_rates_lookup
-    ON exchange_rates (base_code, target_code, fetched_at DESC);
-
--- 최신 환율 뷰
-CREATE VIEW latest_exchange_rates AS
-SELECT DISTINCT ON (base_code, target_code, source)
-    base_code, target_code, rate, source, fetched_at
-FROM exchange_rates
-ORDER BY base_code, target_code, source, fetched_at DESC;
-```
-
-### 6.2 Redis 캐시 전략
-
-```python
-# 최신 환율 캐시 (키: exchange:USD:KRW, TTL: 10분)
-redis_client.setex(
-    f"exchange:{base}:{target}",
-    600,  # 10분 TTL
-    json.dumps({"rate": rate, "source": source, "fetched_at": ts})
-)
-
-# 전체 환율 목록 캐시 (키: exchange:all, TTL: 5분)
-redis_client.setex("exchange:all", 300, json.dumps(all_rates))
-```
-
-- **캐시 히트 시**: Redis에서 즉시 반환 (< 1ms)
-- **캐시 미스 시**: PostgreSQL 조회 후 캐시 갱신
+- Canvas/WebGL 핑거프린트 우회 미적용
+- TLS JA3 핑거프린트 우회 불가 (OS 수준)
+- 장시간 실행 시 Cloudflare가 세션을 강제 종료할 수 있음 → 재연결로 대응
 
 ---
 
-## 7. 봇 탐지 우회 기법
+## 7. 에러 처리 체계
 
-### 7.1 기본 기법
-
-```python
-import requests
-import random
-import time
-
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/122.0.0.0 Safari/537.36",
-    "Accept-Language": "ko-KR,ko;q=0.9",
-    "Referer": "https://www.google.com/",
-}
-
-# 요청 간 랜덤 딜레이
-time.sleep(random.uniform(1.5, 4.0))
-```
-
-### 7.2 Playwright Stealth 설정
-
-```python
-from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
-
-async def scrape_with_stealth():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await stealth_async(page)  # 봇 탐지 우회
-        await page.goto("https://target-site.com")
-        # ...
-```
-
-### 7.3 주요 우회 전략
-
-| 전략 | 설명 |
-|---|---|
-| User-Agent 로테이션 | 실제 브라우저 UA 사용 |
-| 요청 딜레이 | 1~5초 랜덤 대기 |
-| 세션/쿠키 관리 | 브라우저 세션 유지 |
-| Playwright stealth | 자동화 탐지 시그니처 제거 |
-| 프록시 로테이션 | IP 차단 우회 (필요시) |
-| Referer 헤더 | 자연스러운 요청 흐름 모방 |
+| 에러 유형 | 판별 방법 | 대응 |
+|---|---|---|
+| 세션 종료 | `isSessionError()` — 5개 문자열 패턴 매칭 | 재연결 (최대 3회) |
+| Cloudflare 차단 | `isBlocked()` → `BlockedError` | 재연결 (최대 3회) |
+| 파싱 실패 | `isNaN(rate)` | 로그 출력, 다음 틱 재시도 |
+| 셀렉터 미발견 | `page.$()` 결과 null | 로그 출력, 다음 틱 재시도 |
+| 최대 재연결 초과 | `reconnectCount >= 3` | `process.exit(1)` |
+| 치명적 오류 | main() catch | 로그 출력 + `process.exit(1)` |
 
 ---
 
-## 8. 법적·윤리적 고려사항
+## 8. WSL2 환경 특이사항
 
-### 8.1 robots.txt 준수
-
-크롤링 전 반드시 `robots.txt` 확인 필요:
-```
-https://finance.naver.com/robots.txt
-https://www.kebhana.com/robots.txt
-```
-
-```python
-import urllib.robotparser
-
-rp = urllib.robotparser.RobotFileParser()
-rp.set_url("https://target-site.com/robots.txt")
-rp.read()
-can_fetch = rp.can_fetch("*", "/target-path")
-```
-
-### 8.2 권장 원칙
-
-1. **공식 API 우선**: 가능하면 공식 API 사용 (수출입은행, Frankfurter 등)
-2. **robots.txt 준수**: 크롤링 금지 경로 회피
-3. **Rate Limiting**: 서버 부하 방지, 5~10초 이상 딜레이
-4. **개인정보 미수집**: 환율 데이터만 수집 (개인정보 X)
-5. **ToS 확인**: 각 사이트의 이용약관 검토
-6. **캐싱 활용**: 불필요한 반복 요청 방지
-
-### 8.3 한국 법적 현황
-
-- **공공데이터 활용**: 한국수출입은행 등 공공데이터 API는 법적으로 안전
-- **일반 사이트 크롤링**: 저작권법, 정보통신망법 저촉 가능성 있으므로 ToS 확인 필수
-- **비공개 데이터 접근**: 로그인 필요 데이터, 유료 콘텐츠 크롤링 금지
+- Playwright Chromium 실행에 필요한 시스템 라이브러리(`libnspr4`, `libnss3`, `libasound2` 등)가 WSL2에 기본 설치되지 않음
+- 해결: `apt-get download` + `dpkg -x`로 `~/local-libs`에 추출
+- `index.js`에서 `LD_LIBRARY_PATH`에 해당 경로를 동적으로 추가하여 런타임에 로딩
 
 ---
 
-## 9. 권장 기술 스택 요약
+## 9. 실행 방법
 
-### 소규모/개인 프로젝트
+```bash
+# 의존성 설치
+npm install
+npx playwright install chromium
 
-```
-언어:        Python 3.11+
-HTTP 클라이언트: httpx (async) 또는 requests
-HTML 파서:   BeautifulSoup4
-동적 크롤링:  Playwright
-스케줄링:    APScheduler
-데이터베이스: SQLite (개발) → PostgreSQL (운영)
-캐시:        딕셔너리 캐시 또는 Redis (선택)
-API 서버:    FastAPI
+# 실행
+npm start
+# 또는
+node src/index.js
 ```
 
-### 중규모/팀 프로젝트
+### 예상 출력
 
 ```
-언어:        Python 3.11+
-HTTP 클라이언트: httpx (async)
-동적 크롤링:  Playwright / Scrapy + Playwright
-스케줄링:    Celery + Celery Beat
-메시지 브로커: Redis
-데이터베이스: PostgreSQL
-캐시:        Redis
-API 서버:    FastAPI + Uvicorn
-컨테이너:    Docker + Docker Compose
-모니터링:    Flower (Celery), Prometheus + Grafana
+페이지 로딩 중...
+페이지 로딩 완료
+
+[14:32:01] USD/KRW: 1,493.59 | 금일 변동 중간값: 1492.47
+[14:32:11] USD/KRW: 1,494.09 | 금일 변동 중간값: 1492.47
 ```
 
-### 핵심 Python 패키지
+### 종료
 
-```txt
-# requirements.txt
-httpx==0.27.0
-beautifulsoup4==4.12.3
-lxml==5.2.0
-playwright==1.44.0
-playwright-stealth==1.0.6
-celery==5.4.0
-redis==5.0.4
-apscheduler==3.10.4
-fastapi==0.111.0
-uvicorn==0.29.0
-sqlalchemy==2.0.30
-asyncpg==0.29.0
-alembic==1.13.1
-pydantic==2.7.0
-python-dotenv==1.0.1
-```
+`Ctrl+C` (SIGINT) 또는 SIGTERM 전송
 
 ---
 
-## 10. 구현 로드맵
+## 10. 의존성 목록
 
-### Phase 1: 기초 구축 (1~2주)
+| 패키지 | 버전 | 용도 |
+|---|---|---|
+| `playwright` | ^1.58.2 | headless Chromium 브라우저 자동화 |
+| `playwright-extra` | ^4.3.6 | playwright에 플러그인 시스템 추가 |
+| `puppeteer-extra-plugin-stealth` | ^2.11.2 | 봇 탐지 우회 (playwright-extra 호환) |
 
-- [ ] 프로젝트 구조 설계 및 환경 설정
-- [ ] 한국수출입은행 API 연동 (공식, 안전)
-- [ ] Frankfurter API 연동 (글로벌, 무료)
-- [ ] 기본 데이터 모델 설계 (SQLAlchemy)
-- [ ] 단순 APScheduler 기반 주기적 수집
-
-### Phase 2: 크롤링 고도화 (2~3주)
-
-- [ ] 네이버 환율 Playwright 크롤링 구현
-- [ ] 하나은행 환율 크롤링 구현
-- [ ] 봇 탐지 우회 로직 적용
-- [ ] 에러 처리 및 재시도 로직
-- [ ] 데이터 정규화 및 검증 파이프라인
-
-### Phase 3: 인프라 구축 (1~2주)
-
-- [ ] Celery + Redis 기반 비동기 작업 큐 전환
-- [ ] PostgreSQL 마이그레이션 (Alembic)
-- [ ] Redis 캐싱 레이어 적용
-- [ ] FastAPI REST API 서버 구축
-- [ ] Docker Compose 환경 구성
-
-### Phase 4: 운영 및 모니터링 (1주)
-
-- [ ] Flower 대시보드로 Celery 모니터링
-- [ ] 로깅 시스템 구축 (structlog)
-- [ ] 알림 시스템 (수집 실패 시 알림)
-- [ ] 성능 최적화 및 부하 테스트
+> 참고: `playwright-extra-plugin-stealth`는 npm에 잘못된 버전이므로 `puppeteer-extra-plugin-stealth`를 대신 사용.
 
 ---
 
-## 참고 자료
+## 11. 개발 히스토리 (plan.md / block-fix-plan.md 기반)
 
-### 국내 환율 데이터 소스
-- [한국수출입은행 환율 Open API - 공공데이터포털](https://www.data.go.kr/data/3068846/openapi.do)
-- [한국은행 ECOS Open API](https://ecos.bok.or.kr/api/)
-- [한국수출입은행 환율 API 신청방법](https://wetoz.kr/html/board.php?bo_table=tipntech&wr_id=313&sca=API)
-- [네이버 환율 크롤링 - 테디노트](https://teddylee777.github.io/python/selenium-naver-currency/)
-- [하나은행 환율 크롤링 (Java Jsoup)](https://velog.io/@ysy3285/Java-Jsoup을-이용한-웹-크롤링하나은행-환율-정보)
+### Phase 1: 초기 구현 (plan.md)
 
-### 글로벌 환율 API
-- [Frankfurter - Free ECB Exchange Rates API](https://frankfurter.dev/)
-- [ExchangeRate-API](https://www.exchangerate-api.com/)
-- [Open Exchange Rates](https://openexchangerates.org/)
-- [Fixer.io](https://fixer.io/)
+1. 기술 스택 선정 — Playwright + Node.js + stealth
+2. 셀렉터 탐색 — `[data-test="instrument-price-last"]` 확정
+3. 기본 크롤링 구현 — createCrawler + fetchRate + startScheduler
+4. 실행 검증 — 정상 출력 확인
 
-### 크롤링 기술
-- [Playwright Web Scraping Tutorial 2026 - Oxylabs](https://oxylabs.io/blog/playwright-web-scraping)
-- [Scrapy + Playwright 통합 가이드](https://www.zenrows.com/blog/scrapy-playwright)
-- [BeautifulSoup을 이용한 환율 정보 크롤링 - WikiDocs](https://wikidocs.net/186281)
-- [Python 환율 정보 가져오기 - DataWizard](https://datawizard.co.kr/25)
+### Phase 2: 차단 문제 해결 (block-fix-plan.md)
 
-### 아키텍처 및 인프라
-- [FastAPI + PostgreSQL + Celery + Redis with Docker Compose](https://oneuptime.com/blog/post/2026-02-08-how-to-set-up-a-fastapi-postgresql-celery-stack-with-docker-compose/view)
-- [Celery Beat 주기적 작업 스케줄링](https://medium.com/@pynest/mastering-delayed-tasks-in-python-celery-and-celery-beat-2b7317b96377)
-- [APScheduler 공식 문서](https://apscheduler.readthedocs.io/en/master/api.html)
+장시간 실행 시 발생한 5가지 문제를 분석하고 해결:
 
-### 법적 고려사항
-- [Is Web Scraping Legal in 2026? - Datarama](https://datarama.ai/blog/is-web-scraping-legal-2026)
-- [Ethical Web Scraping Guide 2025 - ScrapingAPI](https://scrapingapi.ai/blog/ethical-web-scraping)
+| # | 문제 | 해결 |
+|---|---|---|
+| 1 | SIGTERM 미처리 → 브라우저 강제 종료 후 에러 | SIGTERM 핸들러 추가 |
+| 2 | UA 버전 불일치 (Chrome 122 vs 실제 145) → 봇 탐지 | UA 명시 설정 제거 |
+| 3 | 세션 종료 시 재연결 없음 → 무한 에러 루프 | isSessionError + reconnect 로직 |
+| 4 | Cloudflare 챌린지 미탐지 → 일반 에러로 처리 | isBlocked() + BlockedError |
+| 5 | 스텔스 불완전 (viewport 미설정, args 충돌) | viewport 추가, 수동 패치, 충돌 args 제거 |
+
+---
+
+## 12. 현재 코드 상태 요약
+
+- 모든 Phase 1, 2 항목 구현 완료
+- 3개 소스 파일, 총 220줄
+- 외부 API/DB 연동 없음 — 순수 콘솔 출력
+- 테스트 코드 없음
+- 환경 변수 / .env 사용 없음 (상수 하드코딩)
+- Docker 설정 없음
