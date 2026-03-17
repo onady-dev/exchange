@@ -4,7 +4,7 @@ import { sendSlackAlert } from './notifier.js';
 const INTERVAL_MS = 10_000;    // 10초
 const MAX_RECONNECT = 3;        // 최대 재연결 횟수
 const RECONNECT_DELAY_MS = 15_000; // 재연결 전 대기 시간
-const RISE_THRESHOLD = 2;       // 저장 환율 대비 상승 알림 기준 (원)
+const RISE_THRESHOLD = 1;       // 저장 환율 대비 상승 알림 기준 (원)
 const STALE_COUNT = 6;          // 같은 값 연속 횟수 (6회 = 1분) → 새로고침
 
 const PORT = process.env.PORT || 3000;
@@ -49,12 +49,12 @@ export function startScheduler(ref, state) {
     if (state.savedRate != null && rate >= state.savedRate + RISE_THRESHOLD && !riseAlerted) {
       riseAlerted = true;
       const diff = Math.round((rate - state.savedRate) * 100) / 100;
-      const text = `📈 USD/KRW 저장 환율 대비 +${RISE_THRESHOLD}원 이상 상승\n현재: ${rate}\n저장 환율: ${state.savedRate} (차이: +${diff})\n시각: ${ts}`;
+      const text = `📈 USD/KRW 저장 환율 대비 +${RISE_THRESHOLD}원 이상 상승\n현재: ${rate}\n저장 환율: ${state.savedRate} (차이: +${diff})\n시각: ${ts}\n\n이 환율을 삭제하려면: http://localhost:${PORT}/clear`;
       await sendSlackAlert(text).catch(e => console.error(`[알림 실패] ${e.message}`));
     }
     if (state.savedRate == null || rate < state.savedRate + RISE_THRESHOLD) riseAlerted = false;
 
-    // 알림 3: 금일 변동 평균값 대비 2원 하락
+    // 알림 3: 금일 변동 평균값 대비 1원 하락
     if (dailyMid != null && rate <= dailyMid - RISE_THRESHOLD && !midDropAlerted) {
       midDropAlerted = true;
       const diff = Math.round((dailyMid - rate) * 100) / 100;
