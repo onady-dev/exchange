@@ -17,7 +17,7 @@
 
 | 항목 | 권장 |
 |---|---|
-| AMI | Amazon Linux 2023 또는 Ubuntu 24.04 |
+| AMI | Ubuntu 24.04 권장 (Playwright 공식 지원). Amazon Linux 2023 사용 시 의존성 수동 설치 필요 |
 | 인스턴스 타입 | t3.small (2 vCPU, 2GB RAM) — Chromium 최소 사양 |
 | 스토리지 | 20GB gp3 — Chromium + 의존성 용량 |
 | 보안 그룹 | SSH(22), API(3000) 인바운드 허용 |
@@ -46,7 +46,11 @@ fnm install 22
 fnm use 22
 
 # Playwright 시스템 의존성 설치
-sudo npx playwright install-deps chromium
+# ⚠️ Amazon Linux는 Playwright 공식 미지원 (install-deps는 apt 기반이라 동작 안 함)
+# yum으로 Chromium 의존성 수동 설치 필요:
+sudo yum install -y atk at-spi2-atk cups-libs libdrm libxcb libxkbcommon \
+  at-spi2-core libX11 libXcomposite libXdamage libXext libXfixes libXrandr \
+  mesa-libgbm pango cairo alsa-lib nss nspr
 ```
 
 ### Step 3: 프로젝트 배포
